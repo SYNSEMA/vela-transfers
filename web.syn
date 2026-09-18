@@ -11,7 +11,7 @@
 -- Every action is one request to the enclave: 30 to 60 seconds on a devnet.
 --
 --   synsema serve web.syn            (from the repository root; .env there = `vela_client.syn -- devnet`)
-intent: "vela workbench: deploy your app, register, deposit, send encrypted payloads, read events and reports — from the browser"
+intent: "private transfers workbench: deploy the app, register, deposit, transfer with an invoice, read events, receipts and reports — from the browser"
 
 require serve(8080)
 require net("localhost")

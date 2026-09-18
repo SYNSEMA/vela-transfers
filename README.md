@@ -1,7 +1,10 @@
-# vela-app — a confidential app for Vela (Horizen), in Synsema
+# vela-transfers — private transfers on Vela (Horizen), in Synsema
 
-[Vela](https://docs.horizen.io/vela/introduction/) runs your application inside a TEE and settles
-every result on-chain. Its official toolchain is Go + TinyGo. This kit gives you the other one:
+Private transfers: balances and transfers stay encrypted inside the enclave, each transfer carries
+an invoice and leaves one public receipt (a hash) on-chain, and an auditor the owner allows can read
+the history. It covers what Horizen's reference app does, in one `.syn` file, and it is the starter
+kit for any Vela app. [Vela](https://docs.horizen.io/vela/introduction/) runs your application
+inside a TEE and settles every result on-chain. Its official toolchain is Go + TinyGo. This kit gives you the other one:
 the app is **one `.syn` file** with its tests, the module is built for you (locally or by CI), and
 the side outside the enclave — keys, deploy, encrypted requests, events, reports, gasless
 meta-transactions — is a Synsema program too. Ten minutes from clone to a request settled
