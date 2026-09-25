@@ -41,7 +41,9 @@ let ETH be "0x0000000000000000000000000000000000000000"
 let PROCESS be 1
 let DEANONYMIZATION be 2
 let ASSOCIATE_KEY be 3
-let GUEST_TAG be env("SYNSEMA_GUEST_TAG", "v0.6.23")
+let GUEST_TAG be env("SYNSEMA_GUEST_TAG", "v0.6.29")
+-- The guest cached per release: bumping GUEST_TAG downloads the new one instead of reusing the old.
+let GUEST_CACHE be "data/guest-" + GUEST_TAG + ".wasm"
 let STATE be "data/app.json"
 let REPORT be "data/report.json"
 
@@ -63,15 +65,23 @@ task config(s)
 
 -- ---- keys ----
 
+-- The state with this console's P-521 key, created (and saved) the first time. Maps are values:
+-- a task that goes on to change `s` and save it must take this one back (`set s to with_p521(s)`),
+-- or its save would write the state without the key and the next request would make another.
+task with_p521(s)
+    when env("VELA_P521_KEY", "") != "" or s["p521_key"] != ""
+        give s
+    let kp be ecdh_keypair("P-521")
+    set s["p521_key"] to decode(reveal(kp["private"]), "hex")
+    set s["p521_pub"] to decode(kp["public"], "hex")
+    save(s)
+    give s
+
 task p521_pair(s)
     when env("VELA_P521_KEY", "") != ""
         give {"key": v.p521_key(), "pub": v.p521_public()}
-    when s["p521_key"] == ""
-        let kp be ecdh_keypair("P-521")
-        set s["p521_key"] to decode(reveal(kp["private"]), "hex")
-        set s["p521_pub"] to decode(kp["public"], "hex")
-        save(s)
-    give {"key": v.p521_of(s["p521_key"]), "pub": v.hex_bytes(s["p521_pub"])}
+    let k be with_p521(s)
+    give {"key": v.p521_of(k["p521_key"]), "pub": v.hex_bytes(k["p521_pub"])}
 
 task user_key(u)
     give v.secp_of(u["key"], "VELA_USER_KEY")
@@ -109,19 +119,19 @@ task short(h)
     give slice(a, 0, 6) + "…" + slice(a, length(a) - 4, length(a))
 
 task host_of(url)
-    let u be replace_text(replace_text(text(url), "https://", ""), "http://", "")
+    let u be replace(replace(text(url), "https://", ""), "http://", "")
     give split(u, "/")[0]
 
 task encrypted(c, keys, plain)
     give v.seal(v.derive_key(keys["key"], v.tee_public_key(c)), bytes(json_encode(plain)))
 
 task qs(msg)
-    let m be replace_text(text(msg), "%", "%25")
-    set m to replace_text(m, "&", "%26")
-    set m to replace_text(m, "#", "%23")
-    set m to replace_text(m, "+", "%2B")
-    set m to replace_text(m, "?", "%3F")
-    give replace_text(trim(m), " ", "+")
+    let m be replace(text(msg), "%", "%25")
+    set m to replace(m, "&", "%26")
+    set m to replace(m, "#", "%23")
+    set m to replace(m, "+", "%2B")
+    set m to replace(m, "?", "%3F")
+    give replace(trim(m), " ", "+")
 
 task back(path, ok, err)
     when err != ""
@@ -137,7 +147,7 @@ task find_user(s, i)
 task decimals_of(c, token)
     when token == ETH
         give 18
-    give abi_decode("uint8", eth_call(c["rpc"], {"to": token, "data": abi_encode("decimals()", [])}))[0]
+    give abi_decode("uint8", evm_call(c["rpc"], {"to": token, "data": abi_encode("decimals()", [])}))[0]
 
 task payload_of(txt)
     let plain be json_decode(txt)
@@ -162,11 +172,11 @@ task do_deploy(s, params_text, trigger)
     let c be config(s)
     let params be when trim(params_text) == "" then nothing otherwise payload_of(params_text)
     let guest be nothing
-    when file_exists("data/guest.wasm")
-        set guest to read_file_bytes("data/guest.wasm")
+    when file_exists(GUEST_CACHE)
+        set guest to read_file_bytes(GUEST_CACHE)
     otherwise
         set guest to slot.release_guest(GUEST_TAG)
-        write_file("data/guest.wasm", guest)
+        write_file(GUEST_CACHE, guest)
     let wasm be slot.embed(guest, read_file("app/app.syn"), "app.syn")
     let ids be v.deploy_bytes(c, wasm, params, when trim(trigger) == "" then nothing otherwise lower(trim(trigger)))
     v.wait_completed(c, ids["request_id"], true)
@@ -177,6 +187,7 @@ task do_deploy(s, params_text, trigger)
 
 task do_register(s)
     let c be config(s)
+    set s to with_p521(s)
     let keys be p521_pair(s)
     let id be v.submit(c, ASSOCIATE_KEY, v.register_payload_with(c, keys["key"], keys["pub"], v.secp_key()), ETH, 0)
     v.wait_completed(c, id, false)
@@ -226,10 +237,11 @@ task do_allow_authority(s)
 -- a user with a key of its own, registered through the facilitator: it needs no ETH
 task do_user(s, name)
     let c be config(s)
+    set s to with_p521(s)
     let keys be p521_pair(s)
     let key be decode(random_bytes(32), "hex")
     let secret be v.secp_of(key, "VELA_USER_KEY")
-    let address be eth_address(secret)
+    let address be evm_address(secret)
     let id be v.submit_for_with(c, secret, ASSOCIATE_KEY, v.register_payload_with(c, keys["key"], keys["pub"], secret), ETH, 0)
     v.wait_completed(c, id, false)
     set s["users"] to append(s["users"], {"name": name, "address": address, "key": key})
@@ -245,7 +257,7 @@ task overview(s, ok, err)
     try
         set d["me"] to v.me()
         set d["me_short"] to short(d["me"])
-        set d["eth"] to nice(v.from_units(text(eth_balance(c["rpc"], d["me"])), 18))
+        set d["eth"] to nice(v.from_units(text(evm_balance(c["rpc"], d["me"])), 18))
         set d["tee"] to v.hex_of(v.tee_public_key(c))
         set d["tee_short"] to short(d["tee"])
     recover e
